@@ -88,17 +88,39 @@ Traditional systems use **Passive RAG**, while autonomous agents use **Agentic R
 
 ```
 PASSIVE RAG:  User Query ──> [Hardcoded Retriever] ──> Inject Context ──> LLM Response
-                                                                       
+                                                                           
 AGENTIC RAG:  User Query ──> [Agent Reasoning] ──> [Tool: search_kb("...")] ──> Observe ──> Decide Next Step
 ```
 
-* **Passive RAG**: A rigid pre-processing pipeline automatically searches the database before the LLM ever sees the query. If the query is multi-step or ambiguous, the search often retrieves wrong chunks.
-* **Agentic RAG**: The Agent treats the knowledge base as a **Tool** (`search_knowledge_base`). The Agent can re-phrase queries, perform multi-hop searches, inspect results, and decide when it has retrieved enough evidence.
+### A. The Core Difference: Single-Pass Blind Pipeline vs. Interactive Loop
+* **Passive RAG (Single-Pass)**: Executes a rigid pre-processing search *before* the LLM sees the prompt. Even if it uses Hybrid (Vector + Keyword) search, it gets only **one blind attempt** to retrieve information.
+* **Agentic RAG (Iterative Loop)**: Exposes search as a **Tool** (`search_knowledge_base`) inside the LLM's ReAct loop (**Think → Act → Observe**). The Agent can break down complex questions, re-phrase searches, inspect results, and run multiple query iterations.
+
+### B. Common Misconception: Vector vs. Keyword Search
+* Passive RAG is **not** limited to vector search—it can use BM25 keyword search or hybrid search.
+* The true failure of Passive RAG on complex queries is **single-pass blind retrieval**. It cannot break down compound questions or perform multi-hop follow-ups.
+
+### C. Concrete Examples
+
+#### Example 1: Technical Troubleshooting
+* **User Query**: *"Why did my deployment fail with error code `ERR_DB_TIMEOUT`, and how do I fix it according to our v2.4 migration guide?"*
+* **Passive RAG (Single Pass)**: Executes one search for the whole sentence. Top-5 chunks return general pages from the v2.4 migration guide, but completely omit the definition of `ERR_DB_TIMEOUT`. The LLM receives incomplete context and hallucinates the error cause.
+* **Agentic RAG (Multi-Step Loop)**:
+  * **Step 1 (Think & Act)**: Calls `search_kb("ERR_DB_TIMEOUT root cause")` → Obtains: *"Occurs when v2.3 connection pool limit (10 connections) is exceeded."*
+  * **Step 2 (Think & Act)**: Realizes it needs the v2.4 connection pool config fix → Calls `search_kb("v2.4 migration guide connection pool config")` → Obtains: *"Set `max_connections: 50` in YAML."*
+  * **Step 3 (Synthesize)**: Merges both findings into an accurate, verified answer.
+
+#### Example 2: Cross-Document Financial Comparison
+* **User Query**: *"Compare Product A's Q1 2024 revenue growth with Product B's Q3 2025 growth."*
+* **Passive RAG (Single Pass)**: Searches the full query once. Results are flooded with Product A 2024 documents, missing Product B 2025 reports entirely.
+* **Agentic RAG (Multi-Step Loop)**:
+  * **Query 1**: `search_kb("Product A Q1 2024 revenue")` → Finds $12.5M (+10%).
+  * **Query 2**: `search_kb("Product B Q3 2025 revenue")` → Finds $18.2M (+15%).
+  * **Synthesis**: Compares both figures accurately (+5% variance).
 
 > **Summary & Actionable Takeaway: Agentic RAG**
->
-> * **Concept Definition**: Agentic RAG transforms retrieval from a fixed pre-processing step into an autonomous tool call controlled by the LLM's ReAct loop.
-> * **Practical Rule**: Expose knowledge base search as a dynamic tool rather than a rigid pre-step, allowing the Agent to re-query, synthesize, and verify search results iteratively.
+> * **Concept Definition**: Agentic RAG transforms retrieval from a fixed single-pass pre-processing pipeline into an autonomous, tool-driven loop controlled by the LLM.
+> * **Practical Rule**: Expose knowledge base search as a dynamic tool rather than a rigid pre-step, allowing the Agent to break down compound questions, re-query, synthesize, and verify search results iteratively.
 
 ---
 
