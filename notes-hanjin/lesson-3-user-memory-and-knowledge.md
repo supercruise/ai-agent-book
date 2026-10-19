@@ -116,3 +116,45 @@ Production memory systems use the **Proposer-Reviewer Pattern**:
 >
 > * **Concept Definition**: The Proposer-Reviewer pattern uses a two-stage verification loop to prevent unverified facts, contradictions, or malicious inputs from corrupting long-term memory.
 > * **Practical Rule**: Never write session observations directly to persistent memory; run candidate updates through a dedicated Reviewer guard prompt first to consolidate and deduplicate facts.
+
+---
+
+## 6. Deep Dive: Neural Reranking in RAG Pipelines
+
+**Reranking** (or neural reranking) is a fine-grained relevance scoring stage in Retrieval-Augmented Generation (RAG) pipelines. It takes a coarse pool of candidate documents retrieved by initial search methods and re-evaluates each document against the query to produce a far more accurate final ranking.
+
+### A. Bi-Encoder vs. Cross-Encoder: The Core Principle
+
+To understand why reranking is necessary, we look at how different model architectures evaluate text similarity:
+
+* **Initial Search (Bi-Encoder)**:
+  * **Mechanism**: Generates independent vector representations for the query and document separately, then measures similarity via vector math (like cosine distance).
+  * **Trade-off**: Extremely fast for screening millions of documents, but cannot capture deep, word-by-word interactions between the query and document text.
+* **Reranking (Cross-Encoder)**:
+  * **Mechanism**: **Concatenates the query and candidate document into a single text sequence** (e.g., `[Query] + [Document]`) and passes them through the Transformer model together.
+  * **Trade-off**: Computationally slower, but allows full self-attention across every word in both the query and document simultaneously, generating a precise relevance score.
+
+> 💡 **Analogy**: Bi-encoders are like a recruiter skimming 100 resumes in 5 minutes for keyword matches; Cross-encoders are like an interviewer having a deep, 1-on-1 conversation with the top 10 candidates.
+
+### B. The 3-Stage Hybrid Reranking Pipeline
+
+In production Agent systems, reranking functions as the final filter in a multi-stage retrieval architecture:
+
+```
+1. Parallel Search ──> Dense Vector Search (Semantics)  ──┐
+                  └──> Sparse BM25 Search (Keywords)    ──┼──> 2. Fusion (RRF) ──> 3. Reranker (Cross-Encoder) ──> Top-K Context
+```
+
+1. **Parallel Retrieval**: Run **Dense Vector Search** (semantic matching) and **Sparse BM25 Search** (exact keyword/part-number matching) in parallel to recall a broad candidate pool (e.g., top 50–100 chunks).
+2. **Candidate Fusion (RRF)**: Merge the dense and sparse candidate lists using **Reciprocal Rank Fusion (RRF)**, which combines candidates based on their rank positions ($\text{Score} = \sum \frac{1}{k + \text{rank}}$) rather than raw incompatible vector scores.
+3. **Neural Cross-Encoder Scoring**: Pass the top candidates from the fused pool into a specialized **Cross-Encoder model** (e.g., `BAAI/bge-reranker-v2-m3`).
+4. **Top-K Context Selection**: Re-sort the candidates by their Cross-Encoder scores and select only the **top 3 to 5 most relevant chunks** to inject into the LLM's context window.
+
+### C. Why Reranking is Critical for Production
+
+* **Promotes Hidden Hits**: Coarse vector or keyword searches often place the exact correct answer at position #15 or #20. A Cross-Encoder identifies the deep semantic match and promotes it to position #1.
+* **Dramatically Cuts Retrieval Failures**: Combining hybrid search with Contextual Retrieval and a neural reranker **reduces retrieval failure rates by up to 67%** compared to plain vector search.
+
+> **Summary & Actionable Takeaway: Reranking**
+> * **Concept Definition**: Reranking uses Cross-Encoder neural models to score the full joint attention of `[Query + Document]` candidate pairs retrieved by coarse hybrid search.
+> * **Practical Rule**: Always place a Cross-Encoder Reranker after Hybrid (Dense + Sparse BM25) retrieval to promote hidden hits and select the top 3–5 highest precision chunks for context injection.
